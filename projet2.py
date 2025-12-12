@@ -26,6 +26,42 @@ df = pd.read_csv("imdb_final.csv")
 df['decade'] = (df['startYear'] // 10) * 10
 
 # ---------------------------
+# MODEL DE RECOMMANDATION
+# ---------------------------
+
+import difflib
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Combine features pour TF-IDF
+df['combined'] = (
+    df['genres'].astype(str) + " " +
+    df['overview'].astype(str) + " " +
+    df['actors'].astype(str) + " " +
+    df['directors'].astype(str)
+)
+
+vectorizer = TfidfVectorizer(stop_words='english')
+tfidf_matrix = vectorizer.fit_transform(df['combined'])
+cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+def recommend_movies(title, top_n=5):
+    titles = df['primaryTitle'].fillna("").values
+
+    match = difflib.get_close_matches(title, titles, n=1, cutoff=0.6)
+    if not match:
+        return pd.DataFrame()
+
+    title = match[0]
+    idx = df[df['primaryTitle'] == title].index[0]
+
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n+1]
+
+    movie_idx = [i for i, score in sim_scores]
+    return df.iloc[movie_idx]
+
+# ---------------------------
 # Paramètres sidebar et menu
 # ---------------------------
 
@@ -135,10 +171,7 @@ if selection == "Accueil":
 # PAGE RECHERCHE
 # ---------------------------
 elif selection == "recherche de films":
-
     st.title("🔍 Recherche de films")
-
-
 
     # Choix du mode de recherche
     mode = st.radio(
@@ -146,7 +179,6 @@ elif selection == "recherche de films":
         ("Recherche par titre", "Recherche par filtres", "Film aléatoire"),
         horizontal=True
     )
-
 
     # --------------------------------------------------------------------
     # 1 RECHERCHE PAR TITRE
@@ -182,15 +214,35 @@ elif selection == "recherche de films":
                         st.write(f"**Producteur :** {directors_clean}")
                         st.write(f"**Distribution :** {actors_clean}")
 
+                        # Résumé
                         with st.expander("Voir le résumé"):
                             st.write(film["overview"])
+
+                        # Films recommandés juste en dessous du résumé
+                        st.subheader("🎯 Films recommandés")
+                        reco = recommend_movies(film['primaryTitle'], top_n=5)
+
+                        if reco.empty:
+                            st.info("Pas de recommandations disponibles.")
+                        else:
+                            for idx2, film2 in reco.iterrows():
+                                with st.expander(f"{film2['primaryTitle']} ({int(film2['startYear'])})"):
+                                    rcol1, rcol2 = st.columns([1, 4])
+
+                                    with rcol1:
+                                        poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
+                                        st.image(poster2, use_container_width=True)
+
+                                    with rcol2:
+                                        st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
+                                        st.write(f"🎬 Producteur(s) : {film2['directors']}")
+                                        st.write(f"🎭 Acteur(s) : {film2['actors']}")
+                                        st.write(film2['overview'])
 
                         st.markdown("---")
 
             else:
                 st.info("Aucun film trouvé.")
-
-
 
     # --------------------------------------------------------------------
     # 2 RECHERCHE PAR FILTRES
@@ -205,7 +257,6 @@ elif selection == "recherche de films":
             .apply(lambda x: [a.strip() for a in x.strip("[]").replace("'", "").split(",")])
         )
         list_actors = sorted(set(sum(all_actors, [])))
-
         selected_actor = st.selectbox("🎭 Choisir un acteur :", ["Aucun"] + list_actors)
 
         # ---- FILTRE PRODUCTEURS ----
@@ -214,19 +265,16 @@ elif selection == "recherche de films":
             .apply(lambda x: [d.strip() for d in x.strip("[]").replace("'", "").split(",")])
         )
         list_directors = sorted(set(sum(all_directors, [])))
-
         selected_director = st.selectbox("🎬 Choisir un producteur :", ["Aucun"] + list_directors)
 
         # ---- FILTRE GENRES ----
         all_genres = df["genres"].dropna().apply(lambda x: x.split(","))
         list_genres = sorted(set(sum(all_genres, [])))
-
         selected_genre = st.selectbox("🏷 Choisir un genre :", ["Aucun"] + list_genres)
 
         # ---- FILTRE ANNÉES ----
         min_year = int(df["startYear"].min())
         max_year = int(df["startYear"].max())
-
         year_range = st.slider(
             "📅 Plage d'années",
             min_value=min_year,
@@ -281,21 +329,41 @@ elif selection == "recherche de films":
                         st.write(f"**Producteur :** {directors_clean}")
                         st.write(f"**Distribution :** {actors_clean}")
 
+                        # Résumé
                         with st.expander("Voir le résumé"):
                             st.write(film["overview"])
 
-                        st.markdown("---")
+                        # Films recommandés
+                        st.subheader("🎯 Films recommandés")
+                        reco = recommend_movies(film['primaryTitle'], top_n=5)
 
+                        if reco.empty:
+                            st.info("Pas de recommandations disponibles.")
+                        else:
+                            for idx2, film2 in reco.iterrows():
+                                with st.expander(f"{film2['primaryTitle']} ({int(film2['startYear'])})"):
+                                    rcol1, rcol2 = st.columns([1, 4])
+
+                                    with rcol1:
+                                        poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
+                                        st.image(poster2, use_container_width=True)
+
+                                    with rcol2:
+                                        st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
+                                        st.write(f"🎬 Producteur(s) : {film2['directors']}")
+                                        st.write(f"🎭 Acteur(s) : {film2['actors']}")
+                                        st.write(film2['overview'])
+
+                        st.markdown("---")
 
     # --------------------------------------------------------------------
     # 3 FILM ALÉATOIRE
     # --------------------------------------------------------------------
     elif mode == "Film aléatoire":
-
         st.subheader("🎲 Un film au hasard...")
 
         if st.button("Tirer un film au hasard 🎬"):
-            film = df.sample(1).iloc[0]  # Tire une ligne aléatoire
+            film = df.sample(1).iloc[0]
 
             col1, col2 = st.columns([1, 4])
 
@@ -314,9 +382,32 @@ elif selection == "recherche de films":
                 st.write(f"**Producteur :** {directors_clean}")
                 st.write(f"**Distribution :** {actors_clean}")
 
+                # Résumé
                 with st.expander("Voir le résumé"):
                     st.write(film["overview"])
 
+                # Films recommandés
+                st.subheader("🎯 Films recommandés")
+                reco = recommend_movies(film['primaryTitle'], top_n=5)
+
+                if reco.empty:
+                    st.info("Pas de recommandations disponibles.")
+                else:
+                    for idx2, film2 in reco.iterrows():
+                        with st.expander(f"{film2['primaryTitle']} ({int(film2['startYear'])})"):
+                            rcol1, rcol2 = st.columns([1, 4])
+
+                            with rcol1:
+                                poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
+                                st.image(poster2, use_container_width=True)
+
+                            with rcol2:
+                                st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
+                                st.write(f"🎬 Producteur(s) : {film2['directors']}")
+                                st.write(f"🎭 Acteur(s) : {film2['actors']}")
+                                st.write(film2['overview'])
+
+            st.markdown("---")
 
 # ---------------------------
 # PAGE BASE DE DONNÉES
