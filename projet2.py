@@ -9,9 +9,22 @@ import matplotlib.pyplot as plt
 import streamlit as st
 import requests
 import random
-import streamlit as st
 from streamlit_option_menu import option_menu
 import base64
+import streamlit.components.v1 as components
+import urllib.parse
+import difflib
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer # type: ignore
+from sklearn.neighbors import NearestNeighbors # type: ignore
+from scipy.sparse import hstack # type: ignore
+
+st.set_page_config(
+    layout="wide",
+    initial_sidebar_state="expanded",
+    page_title="Cinéma Conseil",
+    page_icon="🎬"
+)
 
 def get_base64_image(path):
     with open(path, "rb") as f:
@@ -24,155 +37,268 @@ def get_base64_image(path):
 
 df = pd.read_csv("imdb_final.csv")
 df['decade'] = (df['startYear'] // 10) * 10
+# Nettoyer les titres pour la recherche
+df['title_clean'] = df['originalTitle'].str.lower().str.strip()
 
 # ---------------------------
 # MODEL DE RECOMMANDATION
 # ---------------------------
+# ---------------------------
+# NETTOYAGE DES COLONNES TEXTE (OBLIGATOIRE POUR TF-IDF)
+# ---------------------------
 
-import difflib
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+text_columns = ['overview', 'genres', 'actors', 'directors']
 
-# Combine features pour TF-IDF
-df['combined'] = (
-    df['genres'].astype(str) + " " +
-    df['overview'].astype(str) + " " +
-    df['actors'].astype(str) + " " +
-    df['directors'].astype(str)
-)
+for col in text_columns:
+    df[col] = (
+        df[col]
+        .fillna("")        # remplace NaN par chaîne vide
+        .astype(str)       # garantit du texte
+        .str.lower()       # optionnel mais recommandé
+    )
+# -----------------------------
+# 2️⃣ Détecter films en français
+# -----------------------------
+def is_french(text):
+    text = str(text).lower()
+    french_markers = [
+        " le ", " la ", " les ", " une ", " un ", " des ",
+        " amour ", " vie ", " homme ", " femme ", " famille "
+    ]
+    accents = re.search(r"[éèàçùôêîû]", text)
+    return any(word in text for word in french_markers) or bool(accents)
 
-vectorizer = TfidfVectorizer(stop_words='english')
-tfidf_matrix = vectorizer.fit_transform(df['combined'])
-cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+df['is_french'] = df['overview'].apply(is_french)
 
-def recommend_movies(title, top_n=5):
-    titles = df['primaryTitle'].fillna("").values
+# -----------------------------
+# 3️⃣ Stop words français
+# -----------------------------
+french_stop_words = [
+    "le","la","les","de","des","un","une","et","en","du","au","aux",
+    "pour","sur","avec","par","dans","ce","ces","a","est","qui","que"
+]
 
-    match = difflib.get_close_matches(title, titles, n=1, cutoff=0.6)
+# -----------------------------
+# 4️⃣ TF-IDF par catégorie
+# -----------------------------
+tfidf_overview = TfidfVectorizer(stop_words=french_stop_words, max_features=5000)
+tfidf_genres = TfidfVectorizer()
+tfidf_actors = TfidfVectorizer(max_features=3000)
+tfidf_directors = TfidfVectorizer()
+
+X_overview = tfidf_overview.fit_transform(df['overview'])
+X_genres = tfidf_genres.fit_transform(df['genres'])
+X_actors = tfidf_actors.fit_transform(df['actors'])
+X_directors = tfidf_directors.fit_transform(df['directors'])
+
+# -----------------------------
+# 5️⃣ Pondération stricte
+# -----------------------------
+X = hstack([
+    2 * X_overview,   # Synopsis
+    6 * X_genres,     # Genres (très important)
+    2 * X_actors,     # Acteurs
+    1 * X_directors   # Réalisateurs
+])
+
+# -----------------------------
+# 6️⃣ Modèle KNN
+# -----------------------------
+knn = NearestNeighbors(metric="cosine", algorithm="brute")
+knn.fit(X)
+
+# -----------------------------
+# 7️⃣ Recommandation stricte + FR + populaire + tri
+# -----------------------------
+def recommend_movies(title, df, X, model, top_n=5,
+                        max_distance=0.40, min_rating=7.0, min_votes=1000):
+    title = title.lower().strip()
+
+    match = difflib.get_close_matches(
+        title,
+        df['title_clean'],
+        n=1,
+        cutoff=0.6
+    )
+
     if not match:
-        return pd.DataFrame()
+        return "❌ Film introuvable dans la base."
 
-    title = match[0]
-    idx = df[df['primaryTitle'] == title].index[0]
+    idx = df[df['title_clean'] == match[0]].index[0]
 
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n+1]
+    film_reference = df.iloc[idx]
 
-    movie_idx = [i for i, score in sim_scores]
-    return df.iloc[movie_idx]
+    distances, indices = model.kneighbors(X[idx], n_neighbors=200)
+
+    results = df.iloc[indices[0]].copy()
+    results['distance'] = distances[0]
+
+    # Supprimer le film lui-même
+    results = results[results.index != idx]
+
+    # 🔥 Filtrage strict + français + populaire
+    results = results[
+        (results['distance'] <= max_distance) &
+        (results['is_french'] == True) &
+        (results['averageRating'] >= min_rating) &
+        (results['numVotes'] >= min_votes)
+    ]
+
+    # 🔝 Trier par distance croissante (plus proche en premier)
+    results = results.sort_values(by='distance', ascending=True)
+
+    return film_reference, results.head(top_n)
+
+
+# ---------------------------
+# GESTION DES CLICS CAROUSEL (DOIT ÊTRE ICI, AVANT LA SIDEBAR)
+# ---------------------------
+
+# Initialiser selection dans session_state si nécessaire
+if 'selection' not in st.session_state:
+    st.session_state['selection'] = "Accueil"
+
+# Vérifier si on vient d'un clic sur le carousel
+query_params = st.query_params
+if 'movie_title' in query_params and 'goto' in query_params:
+    if query_params['goto'] == 'search':
+        st.session_state['search_query'] = query_params['movie_title']
+        st.session_state['selection'] = "recherche de films"
+        # Nettoyer les paramètres de l'URL
+        st.query_params.clear()
+        st.rerun()
 
 # ---------------------------
 # Paramètres sidebar et menu
 # ---------------------------
 
-st.set_page_config(layout="wide")
+
 with st.sidebar:
     
-    # Code hexadécimal pour un Jaune Fauve/Ocre :
     COULEUR_FAUVE ='#DAA520'
-    COULEUR_NOIRE ='black' # Couleur au survol (hover) : noir
+    COULEUR_NOIRE ='black'
+    
+    # Utiliser la valeur de session_state pour le menu
     selection = option_menu(
         menu_title=None,
         options = ["Accueil", "recherche de films", "Base de données"],
         icons = ["house-check-fill", "image-alt",""],
-        orientation="vertical", # Maintenez cette orientation pour un look de sidebar
+        orientation="vertical",
         key="main_menu",
-        
-        
+        default_index=["Accueil", "recherche de films", "Base de données"].index(st.session_state['selection']),
         styles={
-            # --- 1. ÉTAT INACTIF (Parfait, icône/texte en Jaune Fauve) ---
             "nav-link": {
                 "color": COULEUR_FAUVE, 
                 "font-size": "16px",
                 "padding-right": "10px",
             },
-            
-            # --- 2. ÉTAT SÉLECTIONNÉ (CORRIGÉ : Jaune Fauve en fond, Noir en texte) ---
             "nav-link-selected": {
-                "background-color": COULEUR_FAUVE, # Nouvelle couleur de fond : Jaune Fauve
-                "color": COULEUR_NOIRE,           # Nouvelle couleur de texte/icône : Noir
+                "background-color": COULEUR_FAUVE,
+                "color": COULEUR_NOIRE,
             },
-            
-            # --- 3. ÉTAT SURVOLÉ (Parfait, icône/texte en Noir) ---
             "nav-link:hover": {
                 "color": COULEUR_NOIRE, 
             },
         }
     )
-
+    
+    # Mettre à jour session_state avec la sélection du menu
+    st.session_state['selection'] = selection
 
 # ---------------------------
-# ACCUEIL
+# ACCUEIL AVEC CAROUSEL CLIQUABLE
 # ---------------------------
 
 if selection == "Accueil":
-#--- Contenu principal de la page "Accueil" ---
-    # Titre principal de l'application (affiché en haut de la page)
     st.title("🎬 Bienvenue sur Cinéma Conseil")
     
-
-# 1. Nettoyer et isoler les chemins de poster valides (non NaN)
-    # On utilise .tolist() pour obtenir une liste native Python des URLs.
+    # Préparer les données du carousel
     posters_valides = df['poster_path'].dropna().tolist()
 
     if posters_valides:
-        # 2. Mélange aléatoire des chemins valides
-        # Note : random.shuffle fonctionne en place (modifie la liste originale)
         random.shuffle(posters_valides)
+        poster_data = []
         
-        # 3. Garder seulement les 12 premiers (ou moins si la liste est plus courte)
-        posters = posters_valides[:15]
-        
+        for poster_url in posters_valides[:15]:
+            film = df[df['poster_path'] == poster_url].iloc[0]
+            poster_data.append({
+                'url': poster_url,
+                'title': film['primaryTitle']
+            })
     else:
-        # Cas où aucune URL de poster n'est trouvée dans le CSV
-        st.warning("Aucun chemin de poster valide n'a été trouvé dans le fichier imdb_final.csv.")
-        posters = [] # Liste vide pour éviter une erreur
+        st.warning("Aucun chemin de poster valide n'a été trouvé.")
+        poster_data = []
 
-    # CSS identique
+    # CSS pour le carousel avec liens
     carousel_css = """
     <style>
-.carousel {
-    display: flex;
-    overflow-x: auto;  /* important : auto = scroll fonctionne */
-    gap: 16px;
-    padding: 16px;
-    width: 100%;
-    -webkit-overflow-scrolling: touch; /* améliore le scroll */
-}
+    .carousel {
+        display: flex;
+        overflow-x: auto;
+        gap: 16px;
+        padding: 16px;
+        width: 100%;
+        -webkit-overflow-scrolling: touch;
+    }
 
-/* cache seulement la scrollbar MAIS la laisse active */
-.carousel::-webkit-scrollbar {
-    height: 0px; /* cache la scrollbar mais garde le scroll */
-}
+    .carousel::-webkit-scrollbar {
+        height: 0px;
+    }
+    
+    .carousel a {
+        flex-shrink: 0;
+        text-decoration: none;
+    }
 
-.carousel img {
-    height: 220px;
-    border-radius: 10px;
-    transition: transform 0.2s;
-}
-.carousel img:hover {
-    transform: scale(1.12);
-    cursor: pointer;
-}
-</style>
-"""
+    .carousel img {
+        height: 400px;
+        border-radius: 10px;
+        transition: transform 0.2s;
+        display: block;
+    }
+    
+    .carousel a:hover img {
+        transform: scale(1.12);
+        cursor: pointer;
+    }
+    </style>
+    """
 
     st.markdown(carousel_css, unsafe_allow_html=True)
 
-    # HTML du carrousel
+    # Construire l'URL de base de l'application
+    # Récupérer l'URL actuelle sans les paramètres
+    current_url = "?"  # Relatif pour éviter les problèmes
+    
+    # Affichage du carousel avec liens
     html = '<div class="carousel">'
-    for url in posters:
-        html += f'<img src="{url}">'
+    for poster_info in poster_data:
+        # Encoder le titre pour l'URL
+        import urllib.parse
+        encoded_title = urllib.parse.quote(poster_info['title'])
+        
+        # Créer un lien avec les paramètres
+        link_url = f"{current_url}movie_title={encoded_title}&goto=search"
+        
+        html += f'<a href="{link_url}"><img src="{poster_info["url"]}" alt="{poster_info["title"]}"></a>'
+    
     html += "</div>"
-
+    
     st.markdown(html, unsafe_allow_html=True)
-
 # ---------------------------
 # PAGE RECHERCHE
 # ---------------------------
 elif selection == "recherche de films":
     st.title("🔍 Recherche de films")
+    
+    # Initialisation de l'état de recherche si ce n'est pas déjà fait
+    if 'search_query' not in st.session_state:
+        st.session_state['search_query'] = ""
 
+    # Déterminer la valeur initiale du champ de recherche
+    # Si nous venons de la page d'accueil, elle contient le titre du film
+    initial_query = st.session_state.get('search_query', '')
+    
     # Choix du mode de recherche
     mode = st.radio(
         "Choisissez votre méthode de recherche :",
@@ -184,14 +310,31 @@ elif selection == "recherche de films":
     # 1 RECHERCHE PAR TITRE
     # --------------------------------------------------------------------
     if mode == "Recherche par titre":
-        query = st.text_input("Titre du film :")
+        
+        # 1. INITIALISATION ET RÉCUPÉRATION DE LA REQUÊTE
+        # Récupère la requête stockée après un clic sur l'accueil, sinon c'est une chaîne vide.
+        initial_query = st.session_state.get('search_query', '')
+        
+        # Champ de saisie : utilise 'initial_query' comme valeur initiale.
+        query = st.text_input("Titre du film :", value=initial_query, key="title_search_input")
 
-        if query:
+        # 2. LOGIQUE D'EXÉCUTION DE LA RECHERCHE
+        # La recherche s'exécute si :
+        # a) L'utilisateur a tapé une requête (query est vrai)
+        # b) OU une requête initiale a été passée par l'état de session (clic sur affiche)
+        if query: 
+            
+            # Important : Vider l'état de la session après l'exécution pour éviter les re-runs automatiques
+            # st.session_state['search_query'] = "" # Optionnel : peut être commenté si l'on souhaite que le champ reste prérempli
+
+            # Trouver les résultats
             results = df[
                 df['primaryTitle'].str.contains(query, case=False, na=False) |
-                df['originalTitle'].str.contains(query, case=False, na=False)
+                df['originalTitle'].str.contains(query, case=False, na=False)|
+                df['frenchTitle'].str.contains(query, case=False, na=False)
             ]
 
+            # 3. AFFICHAGE DES RÉSULTATS (Votre code d'affichage)
             if not results.empty:
                 st.write(f"Résultats pour : **{query}**")
 
@@ -200,10 +343,11 @@ elif selection == "recherche de films":
 
                     with col1:
                         poster = film['poster_path'] if pd.notna(film['poster_path']) else "placeholder.png"
-                        st.image(poster, use_container_width=True)
+                        st.image(poster, width='stretch')
 
                     with col2:
-                        st.markdown(f"### **{film['primaryTitle']}**")
+                        st.markdown(f"### **{film['frenchTitle']}**")
+                        st.write(f"**Genre(s) :** {film['genres']}")
                         st.write(f"**Année :** {int(film['startYear'])}")
                         st.write(f"**Note IMDb :** {film['averageRating']} ⭐ ({int(film['numVotes'])} votes)")
 
@@ -220,30 +364,41 @@ elif selection == "recherche de films":
 
                         # Films recommandés juste en dessous du résumé
                         st.subheader("🎯 Films recommandés")
-                        reco = recommend_movies(film['primaryTitle'], top_n=5)
+                        film_ref,reco = recommend_movies(
+                            film['primaryTitle'],
+                            df,
+                            X,
+                            knn,
+                            top_n=5,
+                            max_distance=0.40,
+                            min_rating=7.0,
+                            min_votes=1000
+                        )
 
                         if reco.empty:
                             st.info("Pas de recommandations disponibles.")
                         else:
                             for idx2, film2 in reco.iterrows():
-                                with st.expander(f"{film2['primaryTitle']} ({int(film2['startYear'])})"):
+                                with st.expander(f"{film2['frenchTitle']} ({int(film2['startYear'])})"):
                                     rcol1, rcol2 = st.columns([1, 4])
 
                                     with rcol1:
                                         poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
-                                        st.image(poster2, use_container_width=True)
+                                        st.image(poster2, width='stretch')
 
                                     with rcol2:
                                         st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
-                                        st.write(f"🎬 Producteur(s) : {film2['directors']}")
-                                        st.write(f"🎭 Acteur(s) : {film2['actors']}")
+                                        st.write(f"🎬 Producteur(s) : {film2['directors'].strip("[]").replace("'", "")}")
+                                        st.write(f"🎭 Acteur(s) : {film2['actors'].strip("[]").replace("'", "")}")
                                         st.write(film2['overview'])
 
                         st.markdown("---")
 
             else:
                 st.info("Aucun film trouvé.")
-
+        
+        else:
+            st.info("Veuillez entrer un titre de film ou cliquer sur une affiche pour lancer la recherche.")
     # --------------------------------------------------------------------
     # 2 RECHERCHE PAR FILTRES
     # --------------------------------------------------------------------
@@ -316,10 +471,10 @@ elif selection == "recherche de films":
 
                     with col1:
                         poster = film['poster_path'] if pd.notna(film['poster_path']) else "placeholder.png"
-                        st.image(poster, use_container_width=True)
+                        st.image(poster, width='stretch')
 
                     with col2:
-                        st.markdown(f"### **{film['primaryTitle']}**")
+                        st.markdown(f"### **{film['frenchTitle']}**")
                         st.write(f"**Année :** {int(film['startYear'])}")
                         st.write(f"**Note IMDb :** {film['averageRating']} ⭐")
 
@@ -335,18 +490,27 @@ elif selection == "recherche de films":
 
                         # Films recommandés
                         st.subheader("🎯 Films recommandés")
-                        reco = recommend_movies(film['primaryTitle'], top_n=5)
+                        film_ref,reco = recommend_movies(
+                            film['originalTitle'],
+                            df,
+                            X,
+                            knn,
+                            top_n=5,
+                            max_distance=0.40,
+                            min_rating=7.0,
+                            min_votes=1000
+                        )
 
                         if reco.empty:
                             st.info("Pas de recommandations disponibles.")
                         else:
                             for idx2, film2 in reco.iterrows():
-                                with st.expander(f"{film2['primaryTitle']} ({int(film2['startYear'])})"):
+                                with st.expander(f"{film2['frenchTitle']} ({int(film2['startYear'])})"):
                                     rcol1, rcol2 = st.columns([1, 4])
 
                                     with rcol1:
                                         poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
-                                        st.image(poster2, use_container_width=True)
+                                        st.image(poster2, width='stretch')
 
                                     with rcol2:
                                         st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
@@ -369,10 +533,10 @@ elif selection == "recherche de films":
 
             with col1:
                 poster = film['poster_path'] if pd.notna(film['poster_path']) else "placeholder.png"
-                st.image(poster, use_container_width=True)
+                st.image(poster, width='stretch')
 
             with col2:
-                st.markdown(f"## **{film['primaryTitle']}**")
+                st.markdown(f"## **{film['frenchTitle']}**")
                 st.write(f"**Année :** {int(film['startYear'])}")
                 st.write(f"**Note IMDb :** {film['averageRating']} ⭐ ({int(film['numVotes'])} votes)")
 
@@ -388,18 +552,27 @@ elif selection == "recherche de films":
 
                 # Films recommandés
                 st.subheader("🎯 Films recommandés")
-                reco = recommend_movies(film['primaryTitle'], top_n=5)
+                film_ref,reco = recommend_movies(
+                    film['originalTitle'],
+                    df,
+                    X,
+                    knn,
+                    top_n=5,
+                    max_distance=0.40,
+                    min_rating=7.0,
+                    min_votes=1000
+                )
 
                 if reco.empty:
                     st.info("Pas de recommandations disponibles.")
                 else:
                     for idx2, film2 in reco.iterrows():
-                        with st.expander(f"{film2['primaryTitle']} ({int(film2['startYear'])})"):
+                        with st.expander(f"{film2['frenchTitle']} ({int(film2['startYear'])})"):
                             rcol1, rcol2 = st.columns([1, 4])
 
                             with rcol1:
                                 poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
-                                st.image(poster2, use_container_width=True)
+                                st.image(poster2, width='stretch')
 
                             with rcol2:
                                 st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
@@ -475,7 +648,9 @@ header_b64 = get_base64_image("images/bandeau.png")
 st.markdown(
     f"""
     <style>
-    /* Fond de l'app */
+    /* --------------------------------- */
+    /* FOND DE L'APPLICATION (IMAGE) */
+    /* --------------------------------- */
     .stApp {{
         background-image: url("data:image/png;base64,{img_base64}");
         background-size: cover;
@@ -484,12 +659,14 @@ st.markdown(
         background-position: center;
     }}
 
-    /* Bandeau fixe en haut */
+    /* --------------------------------- */
+    /* BANDEAU FIXE EN HAUT - CORRIGÉ */
+    /* --------------------------------- */
     .header-div {{
         position: fixed;
         top: 0;
-        left: 0;
-        width: 100%;
+        left: 250px; /* ⭐ DÉCALÉ pour laisser place à la sidebar */
+        width: calc(100% - 250px); /* ⭐ Largeur ajustée */
         height: 120px;
         background-image: url("data:image/png;base64,{header_b64}");
         background-size: cover;
@@ -497,24 +674,379 @@ st.markdown(
         z-index: 999;
     }}
 
-    /* Barre Streamlit : transparente et derrière le bandeau */
-    header[data-testid="stHeader"] {{
-        background-color: rgba(0,0,0,0) !important;
-        z-index: 0 !important;
-    }}
-    header[data-testid="stHeader"] * {{
-        visibility: hidden; /* si tu veux supprimer tout le texte “Deploy” */
+    /* Quand la sidebar est fermée, le bandeau prend toute la largeur */
+    .stApp[data-sidebar-state="collapsed"] .header-div {{
+        left: 0;
+        width: 100%;
     }}
 
-    /* Contenu sous le bandeau */
+    /* --------------------------------- */
+    /* BARRE STREAMLIT (NATIVE) */
+    /* --------------------------------- */
+    header[data-testid="stHeader"] {{
+        background-color: rgba(0,0,0,0) !important;
+        z-index: 9999 !important; /* ⭐ Plus élevé que le bandeau */
+    }}
+
+    /* --------------------------------- */
+    /* SIDEBAR - TOUJOURS VISIBLE */
+    /* --------------------------------- */
+    section[data-testid="stSidebar"] {{
+        z-index: 999999 !important; /* ⭐ Au-dessus de tout */
+    }}
+
+    /* Bouton toggle sidebar - PRIORITÉ MAXIMALE */
+    button[kind="header"] {{
+        z-index: 9999999 !important; /* ⭐ Au-dessus de TOUT */
+    }}
+
+    /* --------------------------------- */
+    /* CONTENU PRINCIPAL */
+    /* --------------------------------- */
     .block-container {{
         background: rgba(0,0,0,0) !important;
-        padding-top: 130px;
+        padding-top: 130px; 
+    }}
+
+    /* --------------------------------- */
+    /* CAROUSEL */
+    /* --------------------------------- */
+    .carousel {{
+        display: flex;
+        overflow-x: auto;
+        gap: 16px;
+        padding: 16px;
+        width: 100%;
+        -webkit-overflow-scrolling: touch; 
+    }}
+
+    .carousel::-webkit-scrollbar {{
+        height: 0px; 
+    }}
+
+    .carousel img {{
+        height: 400px;
+        border-radius: 10px;
+        transition: transform 0.2s;
+        width: auto;
+    }}
+    
+    .carousel img:hover {{
+        transform: scale(1.12);
+        cursor: pointer;
     }}
     </style>
     """,
     unsafe_allow_html=True
 )
+
+# CSS supplémentaire pour les widgets (Radio, Slider, etc.)
+widget_colors_css = """
+<style>
+/* ================================= */
+/* BOUTONS RADIO EN JAUNE FAUVE */
+/* ================================= */
+
+/* Cercle externe du radio button (non sélectionné) - transparent avec bordure jaune légère */
+div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+    background-color: transparent !important;
+    border: 1px solid rgba(218, 165, 32, 0.5) !important;
+}
+
+/* Point intérieur quand sélectionné - rond plein jaune */
+div[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child > div {
+    background-color: #DAA520 !important;
+}
+
+/* Survol du radio button */
+div[data-testid="stRadio"] > div[role="radiogroup"] > label:hover > div:first-child {
+    border-color: #DAA520 !important;
+}
+
+/* ================================= */
+/* SLIDER EN JAUNE FAUVE */
+/* ================================= */
+
+/* Piste du slider (partie remplie) */
+div[data-testid="stSlider"] div[role="slider"] {
+    background-color: #DAA520 !important;
+}
+
+/* Bouton/poignée du slider */
+div[data-testid="stSlider"] div[role="slider"] div {
+    background-color: #DAA520 !important;
+    border-color: #DAA520 !important;
+}
+
+/* Piste de fond du slider */
+div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {
+    background: linear-gradient(to right, #DAA520 0%, #DAA520 var(--value), rgba(255,255,255,0.2) var(--value), rgba(255,255,255,0.2) 100%) !important;
+}
+
+/* Valeurs affichées du slider */
+div[data-testid="stSlider"] div[data-testid="stTickBar"] > div {
+    color: #DAA520 !important;
+}
+
+/* ================================= */
+/* SELECTBOX EN JAUNE FAUVE */
+/* ================================= */
+
+/* Bordure du selectbox au focus */
+div[data-baseweb="select"] > div {
+    border-color: #DAA520 !important;
+}
+
+/* Flèche du selectbox */
+div[data-baseweb="select"] svg {
+    color: #DAA520 !important;
+}
+
+/* Options sélectionnées dans le dropdown */
+li[role="option"][aria-selected="true"] {
+    background-color: rgba(218, 165, 32, 0.2) !important;
+}
+
+/* ================================= */
+/* BOUTONS DE RECHERCHE */
+/* ================================= */
+
+/* Bouton principal */
+button[kind="primary"] {
+    background-color: #DAA520 !important;
+    border-color: #DAA520 !important;
+    color: black !important;
+}
+
+button[kind="primary"]:hover {
+    background-color: #B8860B !important;
+    border-color: #B8860B !important;
+}
+
+/* Bouton secondaire */
+button[kind="secondary"] {
+    border-color: #DAA520 !important;
+    color: #DAA520 !important;
+}
+
+button[kind="secondary"]:hover {
+    background-color: rgba(218, 165, 32, 0.1) !important;
+    border-color: #B8860B !important;
+    color: #B8860B !important;
+}
+
+/* ================================= */
+/* TEXT INPUT EN JAUNE FAUVE */
+/* ================================= */
+
+/* Bordure au focus */
+div[data-baseweb="input"] > div:focus-within {
+    border-color: #DAA520 !important;
+    box-shadow: 0 0 0 1px #DAA520 !important;
+}
+
+/* ================================= */
+/* EXPANDER EN JAUNE FAUVE */
+/* ================================= */
+
+/* Bordure de l'expander */
+div[data-testid="stExpander"] {
+    border-color: #DAA520 !important;
+}
+
+/* Titre de l'expander */
+div[data-testid="stExpander"] summary {
+    color: #DAA520 !important;
+}
+
+/* Icône de l'expander */
+div[data-testid="stExpander"] svg {
+    color: #DAA520 !important;
+}
+
+/* ================================= */
+/* FOND SEMI-TRANSPARENT POUR LISIBILITÉ */
+/* ================================= */
+
+/* Conteneur principal des colonnes de résultats */
+.main div[data-testid="column"] {
+    background-color: rgba(0, 0, 0, 0.7) !important;
+    padding: 15px !important;
+    border-radius: 10px !important;
+    margin-bottom: 10px !important;
+}
+
+/* Conteneur de texte dans les résultats */
+div[data-testid="stMarkdownContainer"] p,
+div[data-testid="stMarkdownContainer"] h1,
+div[data-testid="stMarkdownContainer"] h2,
+div[data-testid="stMarkdownContainer"] h3 {
+    color: white !important;
+}
+
+/* Expander avec fond noir transparent */
+div[data-testid="stExpander"] {
+    background-color: rgba(0, 0, 0, 0.7) !important;
+    border-radius: 8px !important;
+    padding: 10px !important;
+    margin: 10px 0 !important;
+}
+
+/* Contenu à l'intérieur des expanders */
+div[data-testid="stExpander"] div[role="region"] {
+    background-color: rgba(0, 0, 0, 0.5) !important;
+    padding: 10px !important;
+    border-radius: 5px !important;
+}
+
+</style>
+"""
+
+st.markdown(widget_colors_css, unsafe_allow_html=True)
+
+sidebar_hover_css = """
+<style>
+/* ================================= */
+/* SIDEBAR ULTRA-MINIMALISTE - FIXÉE */
+/* ================================= */
+
+/* Sidebar réduite par défaut : 60px */
+section[data-testid="stSidebar"] {
+    width: 30px !important;
+    min-width: 30px !important;
+    max-width: 30px !important;
+    transition: all 0.3s ease-in-out !important;
+    overflow: hidden !important;
+}
+
+/* Sidebar étendue au survol */
+section[data-testid="stSidebar"]:hover {
+    width: 250px !important;
+    min-width: 250px !important;
+    max-width: 250px !important;
+}
+
+/* Container interne */
+section[data-testid="stSidebar"] > div:first-child {
+    width: 250px !important;
+}
+
+/* ================================= */
+/* MENU OPTION_MENU */
+/* ================================= */
+
+/* Container nav du menu */
+section[data-testid="stSidebar"] nav {
+    width: 250px !important;
+}
+
+/* Items du menu quand sidebar réduite */
+section[data-testid="stSidebar"]:not(:hover) .nav-link,
+section[data-testid="stSidebar"]:not(:hover) .nav-link-selected {
+    width: 60px !important;
+    padding: 0.75rem 0 !important;
+    justify-content: center !important;
+    overflow: visible !important;
+}
+
+/* Items du menu au survol */
+section[data-testid="stSidebar"]:hover .nav-link,
+section[data-testid="stSidebar"]:hover .nav-link-selected {
+    width: 100% !important;
+    padding: 0.75rem 1rem !important;
+    justify-content: flex-start !important;
+}
+
+/* ================================= */
+/* ICÔNES - TOUJOURS VISIBLES */
+/* ================================= */
+
+/* Icônes : TOUJOURS visibles et centrées */
+section[data-testid="stSidebar"] .nav-link svg,
+section[data-testid="stSidebar"] .nav-link i,
+section[data-testid="stSidebar"] .nav-link-selected svg,
+section[data-testid="stSidebar"] .nav-link-selected i {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    font-size: 1.5rem !important;
+    min-width: 24px !important;
+    flex-shrink: 0 !important;
+}
+
+/* Espacement icône-texte au survol */
+section[data-testid="stSidebar"]:hover .nav-link svg,
+section[data-testid="stSidebar"]:hover .nav-link i {
+    margin-right: 0.75rem !important;
+}
+
+/* ================================= */
+/* TEXTE - CACHÉ PUIS VISIBLE */
+/* ================================= */
+
+/* Texte caché quand sidebar réduite */
+section[data-testid="stSidebar"]:not(:hover) .nav-link span,
+section[data-testid="stSidebar"]:not(:hover) .nav-link-selected span {
+    display: none !important;
+}
+
+/* Texte visible au survol */
+section[data-testid="stSidebar"]:hover .nav-link span,
+section[data-testid="stSidebar"]:hover .nav-link-selected span {
+    display: inline-block !important;
+    opacity: 1 !important;
+    white-space: nowrap !important;
+}
+
+/* ================================= */
+/* AJUSTEMENT CONTENU PRINCIPAL */
+/* ================================= */
+
+.main {
+    margin-left: 60px !important;
+    transition: margin-left 0.3s ease-in-out !important;
+}
+
+section[data-testid="stSidebar"]:hover ~ .main {
+    margin-left: 250px !important;
+}
+
+/* ================================= */
+/* AJUSTEMENT BANDEAU */
+/* ================================= */
+
+.header-div {
+    left: 60px !important;
+    width: calc(100% - 60px) !important;
+    transition: all 0.3s ease-in-out !important;
+}
+
+body:has(section[data-testid="stSidebar"]:hover) .header-div {
+    left: 250px !important;
+    width: calc(100% - 250px) !important;
+}
+
+/* ================================= */
+/* SCROLLBAR */
+/* ================================= */
+
+section[data-testid="stSidebar"]::-webkit-scrollbar {
+    width: 0px !important;
+}
+
+section[data-testid="stSidebar"]:hover::-webkit-scrollbar {
+    width: 6px !important;
+}
+
+section[data-testid="stSidebar"]:hover::-webkit-scrollbar-thumb {
+    background: #DAA520 !important;
+    border-radius: 10px !important;
+}
+
+</style>
+"""
+
+st.markdown(sidebar_hover_css, unsafe_allow_html=True)
 
 # Injection du div bandeau fixe
 st.markdown('<div class="header-div"></div>', unsafe_allow_html=True)
