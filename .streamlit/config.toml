@@ -1,0 +1,6 @@
+[theme]
+# Couleur de la sidebar en mode Clair/Sombre
+secondaryBackgroundColor = "#0E1117" 
+
+# Optionnel, si vous voulez forcer le mode sombre par défaut
+base = "dark"
