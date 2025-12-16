@@ -13,6 +13,11 @@ from streamlit_option_menu import option_menu
 import base64
 import streamlit.components.v1 as components
 import urllib.parse
+import difflib
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer # type: ignore
+from sklearn.neighbors import NearestNeighbors # type: ignore
+from scipy.sparse import hstack # type: ignore
 
 st.set_page_config(
     layout="wide",
@@ -32,42 +37,118 @@ def get_base64_image(path):
 
 df = pd.read_csv("imdb_final.csv")
 df['decade'] = (df['startYear'] // 10) * 10
+# Nettoyer les titres pour la recherche
+df['title_clean'] = df['originalTitle'].str.lower().str.strip()
 
 # ---------------------------
 # MODEL DE RECOMMANDATION
 # ---------------------------
+# ---------------------------
+# NETTOYAGE DES COLONNES TEXTE (OBLIGATOIRE POUR TF-IDF)
+# ---------------------------
 
-import difflib
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+text_columns = ['overview', 'genres', 'actors', 'directors']
 
-# Combine features pour TF-IDF
-df['combined'] = (
-    df['genres'].astype(str) + " " +
-    df['overview'].astype(str) + " " +
-    df['actors'].astype(str) + " " +
-    df['directors'].astype(str)
-)
+for col in text_columns:
+    df[col] = (
+        df[col]
+        .fillna("")        # remplace NaN par chaîne vide
+        .astype(str)       # garantit du texte
+        .str.lower()       # optionnel mais recommandé
+    )
+# -----------------------------
+# 2️⃣ Détecter films en français
+# -----------------------------
+def is_french(text):
+    text = str(text).lower()
+    french_markers = [
+        " le ", " la ", " les ", " une ", " un ", " des ",
+        " amour ", " vie ", " homme ", " femme ", " famille "
+    ]
+    accents = re.search(r"[éèàçùôêîû]", text)
+    return any(word in text for word in french_markers) or bool(accents)
 
-vectorizer = TfidfVectorizer(stop_words='english')
-tfidf_matrix = vectorizer.fit_transform(df['combined'])
-cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+df['is_french'] = df['overview'].apply(is_french)
 
-def recommend_movies(title, top_n=5):
-    titles = df['primaryTitle'].fillna("").values
+# -----------------------------
+# 3️⃣ Stop words français
+# -----------------------------
+french_stop_words = [
+    "le","la","les","de","des","un","une","et","en","du","au","aux",
+    "pour","sur","avec","par","dans","ce","ces","a","est","qui","que"
+]
 
-    match = difflib.get_close_matches(title, titles, n=1, cutoff=0.6)
+# -----------------------------
+# 4️⃣ TF-IDF par catégorie
+# -----------------------------
+tfidf_overview = TfidfVectorizer(stop_words=french_stop_words, max_features=5000)
+tfidf_genres = TfidfVectorizer()
+tfidf_actors = TfidfVectorizer(max_features=3000)
+tfidf_directors = TfidfVectorizer()
+
+X_overview = tfidf_overview.fit_transform(df['overview'])
+X_genres = tfidf_genres.fit_transform(df['genres'])
+X_actors = tfidf_actors.fit_transform(df['actors'])
+X_directors = tfidf_directors.fit_transform(df['directors'])
+
+# -----------------------------
+# 5️⃣ Pondération stricte
+# -----------------------------
+X = hstack([
+    2 * X_overview,   # Synopsis
+    6 * X_genres,     # Genres (très important)
+    2 * X_actors,     # Acteurs
+    1 * X_directors   # Réalisateurs
+])
+
+# -----------------------------
+# 6️⃣ Modèle KNN
+# -----------------------------
+knn = NearestNeighbors(metric="cosine", algorithm="brute")
+knn.fit(X)
+
+# -----------------------------
+# 7️⃣ Recommandation stricte + FR + populaire + tri
+# -----------------------------
+def recommend_movies(title, df, X, model, top_n=5,
+                        max_distance=0.40, min_rating=7.0, min_votes=1000):
+    title = title.lower().strip()
+
+    match = difflib.get_close_matches(
+        title,
+        df['title_clean'],
+        n=1,
+        cutoff=0.6
+    )
+
     if not match:
-        return pd.DataFrame()
+        return "❌ Film introuvable dans la base."
 
-    title = match[0]
-    idx = df[df['primaryTitle'] == title].index[0]
+    idx = df[df['title_clean'] == match[0]].index[0]
 
-    sim_scores = list(enumerate(cosine_sim[idx]))
-    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n+1]
+    film_reference = df.iloc[idx]
 
-    movie_idx = [i for i, score in sim_scores]
-    return df.iloc[movie_idx]
+    distances, indices = model.kneighbors(X[idx], n_neighbors=200)
+
+    results = df.iloc[indices[0]].copy()
+    results['distance'] = distances[0]
+
+    # Supprimer le film lui-même
+    results = results[results.index != idx]
+
+    # 🔥 Filtrage strict + français + populaire
+    results = results[
+        (results['distance'] <= max_distance) &
+        (results['is_french'] == True) &
+        (results['averageRating'] >= min_rating) &
+        (results['numVotes'] >= min_votes)
+    ]
+
+    # 🔝 Trier par distance croissante (plus proche en premier)
+    results = results.sort_values(by='distance', ascending=True)
+
+    return film_reference, results.head(top_n)
+
 
 # ---------------------------
 # GESTION DES CLICS CAROUSEL (DOIT ÊTRE ICI, AVANT LA SIDEBAR)
@@ -249,7 +330,8 @@ elif selection == "recherche de films":
             # Trouver les résultats
             results = df[
                 df['primaryTitle'].str.contains(query, case=False, na=False) |
-                df['originalTitle'].str.contains(query, case=False, na=False)
+                df['originalTitle'].str.contains(query, case=False, na=False)|
+                df['frenchTitle'].str.contains(query, case=False, na=False)
             ]
 
             # 3. AFFICHAGE DES RÉSULTATS (Votre code d'affichage)
@@ -261,10 +343,11 @@ elif selection == "recherche de films":
 
                     with col1:
                         poster = film['poster_path'] if pd.notna(film['poster_path']) else "placeholder.png"
-                        st.image(poster, use_container_width=True)
+                        st.image(poster, width='stretch')
 
                     with col2:
-                        st.markdown(f"### **{film['originalTitle']}**")
+                        st.markdown(f"### **{film['frenchTitle']}**")
+                        st.write(f"**Genre(s) :** {film['genres']}")
                         st.write(f"**Année :** {int(film['startYear'])}")
                         st.write(f"**Note IMDb :** {film['averageRating']} ⭐ ({int(film['numVotes'])} votes)")
 
@@ -281,18 +364,27 @@ elif selection == "recherche de films":
 
                         # Films recommandés juste en dessous du résumé
                         st.subheader("🎯 Films recommandés")
-                        reco = recommend_movies(film['primaryTitle'], top_n=5)
+                        film_ref,reco = recommend_movies(
+                            film['primaryTitle'],
+                            df,
+                            X,
+                            knn,
+                            top_n=5,
+                            max_distance=0.40,
+                            min_rating=7.0,
+                            min_votes=1000
+                        )
 
                         if reco.empty:
                             st.info("Pas de recommandations disponibles.")
                         else:
                             for idx2, film2 in reco.iterrows():
-                                with st.expander(f"{film2['originalTitle']} ({int(film2['startYear'])})"):
+                                with st.expander(f"{film2['frenchTitle']} ({int(film2['startYear'])})"):
                                     rcol1, rcol2 = st.columns([1, 4])
 
                                     with rcol1:
                                         poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
-                                        st.image(poster2, use_container_width=True)
+                                        st.image(poster2, width='stretch')
 
                                     with rcol2:
                                         st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
@@ -379,10 +471,10 @@ elif selection == "recherche de films":
 
                     with col1:
                         poster = film['poster_path'] if pd.notna(film['poster_path']) else "placeholder.png"
-                        st.image(poster, use_container_width=True)
+                        st.image(poster, width='stretch')
 
                     with col2:
-                        st.markdown(f"### **{film['originalTitle']}**")
+                        st.markdown(f"### **{film['frenchTitle']}**")
                         st.write(f"**Année :** {int(film['startYear'])}")
                         st.write(f"**Note IMDb :** {film['averageRating']} ⭐")
 
@@ -398,18 +490,27 @@ elif selection == "recherche de films":
 
                         # Films recommandés
                         st.subheader("🎯 Films recommandés")
-                        reco = recommend_movies(film['primaryTitle'], top_n=5)
+                        film_ref,reco = recommend_movies(
+                            film['originalTitle'],
+                            df,
+                            X,
+                            knn,
+                            top_n=5,
+                            max_distance=0.40,
+                            min_rating=7.0,
+                            min_votes=1000
+                        )
 
                         if reco.empty:
                             st.info("Pas de recommandations disponibles.")
                         else:
                             for idx2, film2 in reco.iterrows():
-                                with st.expander(f"{film2['originalTitle']} ({int(film2['startYear'])})"):
+                                with st.expander(f"{film2['frenchTitle']} ({int(film2['startYear'])})"):
                                     rcol1, rcol2 = st.columns([1, 4])
 
                                     with rcol1:
                                         poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
-                                        st.image(poster2, use_container_width=True)
+                                        st.image(poster2, width='stretch')
 
                                     with rcol2:
                                         st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
@@ -432,10 +533,10 @@ elif selection == "recherche de films":
 
             with col1:
                 poster = film['poster_path'] if pd.notna(film['poster_path']) else "placeholder.png"
-                st.image(poster, use_container_width=True)
+                st.image(poster, width='stretch')
 
             with col2:
-                st.markdown(f"## **{film['originalTitle']}**")
+                st.markdown(f"## **{film['frenchTitle']}**")
                 st.write(f"**Année :** {int(film['startYear'])}")
                 st.write(f"**Note IMDb :** {film['averageRating']} ⭐ ({int(film['numVotes'])} votes)")
 
@@ -451,18 +552,27 @@ elif selection == "recherche de films":
 
                 # Films recommandés
                 st.subheader("🎯 Films recommandés")
-                reco = recommend_movies(film['primaryTitle'], top_n=5)
+                film_ref,reco = recommend_movies(
+                    film['originalTitle'],
+                    df,
+                    X,
+                    knn,
+                    top_n=5,
+                    max_distance=0.40,
+                    min_rating=7.0,
+                    min_votes=1000
+                )
 
                 if reco.empty:
                     st.info("Pas de recommandations disponibles.")
                 else:
                     for idx2, film2 in reco.iterrows():
-                        with st.expander(f"{film2['originalTitle']} ({int(film2['startYear'])})"):
+                        with st.expander(f"{film2['frenchTitle']} ({int(film2['startYear'])})"):
                             rcol1, rcol2 = st.columns([1, 4])
 
                             with rcol1:
                                 poster2 = film2['poster_path'] if pd.notna(film2['poster_path']) else "placeholder.png"
-                                st.image(poster2, use_container_width=True)
+                                st.image(poster2, width='stretch')
 
                             with rcol2:
                                 st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
@@ -802,9 +912,9 @@ sidebar_hover_css = """
 
 /* Sidebar réduite par défaut : 60px */
 section[data-testid="stSidebar"] {
-    width: 60px !important;
-    min-width: 60px !important;
-    max-width: 60px !important;
+    width: 30px !important;
+    min-width: 30px !important;
+    max-width: 30px !important;
     transition: all 0.3s ease-in-out !important;
     overflow: hidden !important;
 }
