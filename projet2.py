@@ -764,28 +764,50 @@ div[data-testid="stRadio"] > div[role="radiogroup"] > label:hover > div:first-ch
 }
 
 /* ================================= */
-/* SLIDER EN JAUNE FAUVE */
+/* SLIDER EN JAUNE FAUVE - VERSION STABLE */
 /* ================================= */
 
-/* Piste du slider (partie remplie) */
-div[data-testid="stSlider"] div[role="slider"] {
-    background-color: #DAA520 !important;
+/* Conteneur principal du slider */
+div[data-testid="stSlider"] {
+    padding: 10px 0 !important;
 }
 
-/* Bouton/poignée du slider */
-div[data-testid="stSlider"] div[role="slider"] div {
+/* Piste de fond (partie non sélectionnée) - Blanche semi-transparente */
+div[data-testid="stSlider"] [data-baseweb="slider"] [data-baseweb="slider-track"] {
+    background: rgba(255, 255, 255, 0.3) !important;
+    height: 4px !important;
+}
+
+/* Barre de progression (partie sélectionnée entre les deux curseurs) - Jaune Fauve */
+div[data-testid="stSlider"] [data-baseweb="slider"] [data-baseweb="slider-track"]:first-child {
+    background: #DAA520 !important;
+}
+
+/* Poignées/curseurs - Ronds jaunes */
+div[data-testid="stSlider"] [role="slider"] {
     background-color: #DAA520 !important;
+    border: 3px solid #FFD700 !important;
+    width: 20px !important;
+    height: 20px !important;
+    border-radius: 50% !important;
+    cursor: grab !important;
+}
+
+/* Poignée active (pendant le drag) */
+div[data-testid="stSlider"] [role="slider"]:active {
+    cursor: grabbing !important;
     border-color: #DAA520 !important;
 }
 
-/* Piste de fond du slider */
-div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div {
-    background: linear-gradient(to right, #DAA520 0%, #DAA520 var(--value), rgba(255,255,255,0.2) var(--value), rgba(255,255,255,0.2) 100%) !important;
+/* Valeurs min/max (dates extrêmes) - Blanches et toujours visibles */
+div[data-testid="stSlider"] [data-baseweb="slider"] > div:last-child {
+    color: white !important;
+    font-size: 0.9rem !important;
 }
 
-/* Valeurs affichées du slider */
-div[data-testid="stSlider"] div[data-testid="stTickBar"] > div {
-    color: #DAA520 !important;
+/* Labels des valeurs sélectionnées */
+div[data-testid="stSlider"] [data-baseweb="tooltip"] span {
+    color: #ffffff !important;
 }
 
 /* ================================= */
@@ -868,7 +890,7 @@ div[data-testid="stExpander"] svg {
 /* FOND SEMI-TRANSPARENT POUR LISIBILITÉ */
 /* ================================= */
 
-/* Conteneur principal des colonnes de résultats */
+/* Conteneur principal des colonnes de résultats (SEULEMENT dans le contenu principal) */
 .main div[data-testid="column"] {
     background-color: rgba(0, 0, 0, 0.7) !important;
     padding: 15px !important;
