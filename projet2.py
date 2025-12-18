@@ -53,7 +53,8 @@ for col in text_columns:
     df[col] = (
         df[col]
         .fillna("")        # remplace NaN par chaîne vide
-        .astype(str)       # garantit du texte)
+        .astype(str) 
+    )# garantit du texte)
 # -----------------------------
 # 2️⃣ Détecter films en français
 # -----------------------------
