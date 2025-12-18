@@ -53,14 +53,11 @@ for col in text_columns:
     df[col] = (
         df[col]
         .fillna("")        # remplace NaN par chaîne vide
-        .astype(str)       # garantit du texte
-        .str.lower()       # optionnel mais recommandé
-    )
+        .astype(str)       # garantit du texte)
 # -----------------------------
 # 2️⃣ Détecter films en français
 # -----------------------------
 def is_french(text):
-    text = str(text).lower()
     french_markers = [
         " le ", " la ", " les ", " une ", " un ", " des ",
         " amour ", " vie ", " homme ", " femme ", " famille "
