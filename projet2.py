@@ -94,7 +94,7 @@ X_directors = tfidf_directors.fit_transform(df['directors'])
 # -----------------------------
 X = hstack([
     2 * X_overview,   # Synopsis
-    6 * X_genres,     # Genres (très important)
+    3 * X_genres,     # Genres (très important)
     2 * X_actors,     # Acteurs
     1 * X_directors   # Réalisateurs
 ])
@@ -108,8 +108,7 @@ knn.fit(X)
 # -----------------------------
 # 7️⃣ Recommandation stricte + FR + populaire + tri
 # -----------------------------
-def recommend_movies(title, df, X, model, top_n=5,
-                        max_distance=0.40, min_rating=7.0, min_votes=1000):
+def recommend_movies(title, df, X, model, top_n=5):
     title = title.lower().strip()
 
     match = difflib.get_close_matches(
@@ -135,12 +134,12 @@ def recommend_movies(title, df, X, model, top_n=5,
     results = results[results.index != idx]
 
     # 🔥 Filtrage strict + français + populaire
-    results = results[
+    '''results = results[
         (results['distance'] <= max_distance) &
         (results['is_french'] == True) &
         (results['averageRating'] >= min_rating) &
         (results['numVotes'] >= min_votes)
-    ]
+    ]'''
 
     # 🔝 Trier par distance croissante (plus proche en premier)
     results = results.sort_values(by='distance', ascending=True)
@@ -368,10 +367,7 @@ elif selection == "recherche de films":
                             df,
                             X,
                             knn,
-                            top_n=5,
-                            max_distance=0.40,
-                            min_rating=7.0,
-                            min_votes=1000
+                            top_n=5
                         )
 
                         if reco.empty:
@@ -494,10 +490,7 @@ elif selection == "recherche de films":
                             df,
                             X,
                             knn,
-                            top_n=5,
-                            max_distance=0.40,
-                            min_rating=7.0,
-                            min_votes=1000
+                            top_n=5
                         )
 
                         if reco.empty:
@@ -556,10 +549,7 @@ elif selection == "recherche de films":
                     df,
                     X,
                     knn,
-                    top_n=5,
-                    max_distance=0.40,
-                    min_rating=7.0,
-                    min_votes=1000
+                    top_n=5
                 )
 
                 if reco.empty:
