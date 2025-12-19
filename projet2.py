@@ -233,6 +233,7 @@ if selection == "Accueil":
     .carousel {
         display: flex;
         overflow-x: auto;
+        overflow-y: hidden;
         gap: 16px;
         padding: 16px;
         width: 100%;
@@ -276,9 +277,9 @@ if selection == "Accueil":
         encoded_title = urllib.parse.quote(poster_info['title'])
         
         # Créer un lien avec les paramètres
-        link_url = f"{current_url}movie_title={encoded_title}&goto=search"
+        link_url = f"./?movie_title={encoded_title}&goto=search"
         
-        html += f'<a href="{link_url}"><img src="{poster_info["url"]}" alt="{poster_info["title"]}"></a>'
+        html += f'<a href="{link_url}"target="_self"><img src="{poster_info["url"]}" alt="{poster_info["title"]}"></a>'
     
     html += "</div>"
     
