@@ -133,14 +133,7 @@ def recommend_movies(title, df, X, model, top_n=5):
     # Supprimer le film lui-même
     results = results[results.index != idx]
 
-    # 🔥 Filtrage strict + français + populaire
-    '''results = results[
-        (results['distance'] <= max_distance) &
-        (results['is_french'] == True) &
-        (results['averageRating'] >= min_rating) &
-        (results['numVotes'] >= min_votes)
-    ]'''
-
+    
     # 🔝 Trier par distance croissante (plus proche en premier)
     results = results.sort_values(by='distance', ascending=True)
 
