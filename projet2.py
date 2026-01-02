@@ -94,7 +94,7 @@ X_directors = tfidf_directors.fit_transform(df['directors'])
 # -----------------------------
 X = hstack([
     2 * X_overview,   # Synopsis
-    3 * X_genres,     # Genres (très important)
+    6 * X_genres,     # Genres (très important)
     2 * X_actors,     # Acteurs
     1 * X_directors   # Réalisateurs
 ])
