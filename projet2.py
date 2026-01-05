@@ -454,7 +454,9 @@ elif selection == "recherche de films":
         selected_director = st.selectbox("🎬 Choisir un producteur :", ["Aucun"] + list_directors)
 
         # ---- FILTRE GENRES ----
-        all_genres = df["genres"].dropna().apply(lambda x: x.split(","))
+        # Nettoyage
+        genre_clean = film["genres"].strip("[]").replace("'", "")
+        all_genres = genre_clean.dropna().apply(lambda x: x.split(","))
         list_genres = sorted(set(sum(all_genres, [])))
         selected_genre = st.selectbox("🏷 Choisir un genre :", ["Aucun"] + list_genres)
 
