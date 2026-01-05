@@ -134,7 +134,7 @@ X_directors = tfidf_directors.fit_transform(df['directors'])
 # -----------------------------
 X = hstack([
     2 * X_overview,   # Synopsis
-    6 * X_genres,     # Genres (très important)
+    3 * X_genres,     # Genres (très important)
     2 * X_actors,     # Acteurs
     1 * X_directors   # Réalisateurs
 ])
@@ -377,8 +377,11 @@ elif selection == "recherche de films":
                         st.image(poster, width='stretch')
 
                     with col2:
+                        # Nettoyage
+                        genre_clean = film["genres"].strip("[]").replace("'", "")
+                        
                         st.markdown(f"### **{film['frenchTitle']}**")
-                        st.write(f"**Genre(s) :** {film['genres']}")
+                        st.write(f"**Genre(s) :** {genre_clean}")
                         st.write(f"**Année :** {int(film['startYear'])}")
                         st.write(f"**Note IMDb :** {film['averageRating']} ⭐ ({int(film['numVotes'])} votes)")
 
@@ -415,7 +418,7 @@ elif selection == "recherche de films":
                                         st.image(poster2, width='stretch')
 
                                     with rcol2:
-                                        st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
+                                        st.write(f"⭐ {film2['averageRating']} — {film2['genres'].strip("[]").replace("'", "")}")
                                         st.write(f"🎬 Producteur(s) : {film2['directors'].strip("[]").replace("'", "")}")
                                         st.write(f"🎭 Acteur(s) : {film2['actors'].strip("[]").replace("'", "")}")
                                         st.write(film2['overview'])
@@ -502,7 +505,11 @@ elif selection == "recherche de films":
                         st.image(poster, width='stretch')
 
                     with col2:
+                        # Nettoyage
+                        genre_clean = film["genres"].strip("[]").replace("'", "")
+                        
                         st.markdown(f"### **{film['frenchTitle']}**")
+                        st.write(f"**Genre(s) :** {genre_clean}")
                         st.write(f"**Année :** {int(film['startYear'])}")
                         st.write(f"**Note IMDb :** {film['averageRating']} ⭐")
 
@@ -538,9 +545,9 @@ elif selection == "recherche de films":
                                         st.image(poster2, width='stretch')
 
                                     with rcol2:
-                                        st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
-                                        st.write(f"🎬 Producteur(s) : {film2['directors']}")
-                                        st.write(f"🎭 Acteur(s) : {film2['actors']}")
+                                        st.write(f"⭐ {film2['averageRating']} — {film2['genres'].strip("[]").replace("'", "")}")
+                                        st.write(f"🎬 Producteur(s) : {film2['directors'].strip("[]").replace("'", "")}")
+                                        st.write(f"🎭 Acteur(s) : {film2['actors'].strip("[]").replace("'", "")}")
                                         st.write(film2['overview'])
 
                         st.markdown("---")
@@ -561,7 +568,11 @@ elif selection == "recherche de films":
                 st.image(poster, width='stretch')
 
             with col2:
-                st.markdown(f"## **{film['frenchTitle']}**")
+                # Nettoyage
+                genre_clean = film["genres"].strip("[]").replace("'", "")
+                        
+                st.markdown(f"### **{film['frenchTitle']}**")
+                st.write(f"**Genre(s) :** {genre_clean}")
                 st.write(f"**Année :** {int(film['startYear'])}")
                 st.write(f"**Note IMDb :** {film['averageRating']} ⭐ ({int(film['numVotes'])} votes)")
 
@@ -597,9 +608,9 @@ elif selection == "recherche de films":
                                 st.image(poster2, width='stretch')
 
                             with rcol2:
-                                st.write(f"⭐ {film2['averageRating']} — {film2['genres']}")
-                                st.write(f"🎬 Producteur(s) : {film2['directors']}")
-                                st.write(f"🎭 Acteur(s) : {film2['actors']}")
+                                st.write(f"⭐ {film2['averageRating']} — {film2['genres'].strip("[]").replace("'", "")}")
+                                st.write(f"🎬 Producteur(s) : {film2['directors'].strip("[]").replace("'", "")}")
+                                st.write(f"🎭 Acteur(s) : {film2['actors'].strip("[]").replace("'", "")}")
                                 st.write(film2['overview'])
 
             st.markdown("---")
