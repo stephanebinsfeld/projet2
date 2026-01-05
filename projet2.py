@@ -660,7 +660,7 @@ elif selection == "Base de données":
     ax2.grid(True)
     st.pyplot(fig2)
 
-    st.subheader("🏷 Top 10 des genres")
+
  
 
 # ---------------------------
