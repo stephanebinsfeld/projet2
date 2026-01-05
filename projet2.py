@@ -40,6 +40,46 @@ df['decade'] = (df['startYear'] // 10) * 10
 # Nettoyer les titres pour la recherche
 df['title_clean'] = df['originalTitle'].str.lower().str.strip()
 
+# -------------------------------
+# 1️⃣ Fonction sûre pour convertir les listes stockées en string
+# -------------------------------
+def safe_literal_eval(x):
+    if pd.isna(x) or x == "":
+        return []   # retourne une liste vide si NaN ou chaîne vide
+    try:
+        return ast.literal_eval(x)
+    except:
+        # si ast échoue (ex: tronqué avec ...), on tente nettoyage simple
+        x_clean = (
+            x.replace("[", "")
+             .replace("]", "")
+             .replace("...", "")
+             .replace("'", "")
+        )
+        return [item.strip() for item in x_clean.split(",") if item.strip()]
+
+# -------------------------------
+# 2️⃣ Appliquer à chaque colonne
+# -------------------------------
+for col in ["genres", "directors", "actors"]:
+    df[col] = df[col].apply(safe_literal_eval)
+
+# -------------------------------
+# 3️⃣ Exploser chaque colonne
+# -------------------------------
+df_genres = df.explode("genres").reset_index(drop=True)
+df_directors = df.explode("directors").reset_index(drop=True)
+df_actors = df.explode("actors").reset_index(drop=True)
+
+# -------------------------------
+# 4️⃣ Nettoyer les espaces
+# -------------------------------
+for df_tmp, col_name in zip([df_genres, df_directors, df_actors], ["genres", "directors", "actors"]):
+    df_tmp[col_name] = df_tmp[col_name].str.strip()
+
+
+
+
 # ---------------------------
 # MODEL DE RECOMMANDATION
 # ---------------------------
