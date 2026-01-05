@@ -661,11 +661,13 @@ elif selection == "Base de données":
     st.pyplot(fig2)
 
     st.subheader("🏷 Top 10 des genres")
-    genres_exp = df.copy()
-    genres_exp = genres_exp.explode("genres")
+    # Compter le nombre de films par genre
+    genre_counts = df_genres["genres"].value_counts().reset_index()
+    genre_counts.columns = ["genres", "Count"]  # renommer les colonnes
+
     top_genres = genres_exp['genres'].value_counts().head(10)
     fig3, ax3 = plt.subplots(figsize=(10,5))
-    top_genres.plot(kind='barh', color='gold', ax=ax3)
+    sns.barplot(y="genres", x="Count", data=genre_counts,palette=palette_jaune_noir, ax=ax3)
     ax3.set_xlabel("Nombre de films")
     ax3.set_ylabel("Genre")
     ax3.set_title("Top 10 des genres")
