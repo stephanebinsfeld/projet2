@@ -448,7 +448,7 @@ elif selection == "recherche de films":
         # ---- FILTRE PRODUCTEURS ----
         all_directors = (
             df["directors"].dropna()
-            .apply(lambda x: [d.strip() for d in x.strip("[]").replace("'", "").split(",")])
+            .apply(lambda x: [d.strip() for d in x.strip("[]").replace("'", "").replace('"', "").split(",")])
         )
         list_directors = sorted(set(sum(all_directors, [])))
         selected_director = st.selectbox("🎬 Choisir un producteur :", ["Aucun"] + list_directors)
