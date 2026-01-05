@@ -440,7 +440,7 @@ elif selection == "recherche de films":
         # ---- FILTRE ACTEURS ----
         all_actors = (
             df["actors"].dropna()
-            .apply(lambda x: [a.strip() for a in x.strip("[]").replace("'", "").split(",")])
+            .apply(lambda x: [a.strip() for a in x.strip("[]").replace("'", "").replace('"', "").split(",")])
         )
         list_actors = sorted(set(sum(all_actors, [])))
         selected_actor = st.selectbox("🎭 Choisir un acteur :", ["Aucun"] + list_actors)
@@ -662,9 +662,8 @@ elif selection == "Base de données":
 
     st.subheader("🏷 Top 10 des genres")
     genres_exp = df.copy()
-    genres_exp['genre'] = genres_exp['genres'].str.split(',')
-    genres_exp = genres_exp.explode('genre')
-    top_genres = genres_exp['genre'].value_counts().head(10)
+    genres_exp = genres_exp.explode("genres")
+    top_genres = genres_exp['genres'].value_counts().head(10)
     fig3, ax3 = plt.subplots(figsize=(10,5))
     top_genres.plot(kind='barh', color='gold', ax=ax3)
     ax3.set_xlabel("Nombre de films")
